@@ -1,6 +1,5 @@
 package com.shansun.log4j.parser;
 
-
 import java.io.File;
 import java.io.FileInputStream;
 import java.text.DateFormat;
@@ -14,6 +13,7 @@ import org.apache.commons.io.LineIterator;
 import org.apache.log4j.Level;
 import org.apache.log4j.Logger;
 
+import com.shansun.log4j.constants.Constants;
 import com.shansun.log4j.conversion.ConversionPatternParser;
 import com.shansun.log4j.model.ConversionPatternEl;
 import com.shansun.log4j.model.LogEntry;
@@ -35,19 +35,6 @@ import com.shansun.log4j.utils.StringUtils;
  */
 public class LogFileParser {
 
-	public static final String FIELD_LOGGER = "logger";
-	public static final String FIELD_TIMESTAMP = "timestamp";
-	public static final String FIELD_LEVEL = "level";
-	public static final String FIELD_THREAD = "thread";
-	public static final String FIELD_MESSAGE = "message";
-	public static final String FIELD_CURRENT_LINE = "currLine";
-	public static final String FIELD_IS_HIT = "isHit";
-	public static final String FIELD_NDC = "ndc";
-	public static final String FIELD_THROWABLE = "throwable";
-	public static final String FIELD_LOC_FILENAME = "locFilename";
-	public static final String FIELD_LOC_CLASS = "locClass";
-	public static final String FIELD_LOC_METHOD = "locMethod";
-	public static final String FIELD_LOC_LINE = "locLine";
 	private static Logger logger = Logger.getLogger(LogFileParser.class);
 	private ConversionPatternParser conversionPatternParser;
 
@@ -55,21 +42,53 @@ public class LogFileParser {
 		conversionPatternParser = new ConversionPatternParser();
 	}
 
+	/**
+	 * 解析日志文件，搜索日志行是否包含某关键字，并记录上下文N行
+	 * @param fileName 日志文件路径
+	 * @param conversionPattern Log4j中配置的ConversionPattern
+	 * @param content 关键字内容
+	 * @param upperLogNum 命中日志行的向上多少行
+	 * @param lowerLogNum 命中日志行的向下多少行
+	 * @return 收集的符合条件的日志行集合
+	 * @throws Exception
+	 */
 	public List<LogEntry> parse(String fileName, String conversionPattern, String content, Integer upperLogNum, Integer lowerLogNum) throws Exception {
 		List<ConversionPatternEl> extractRules = conversionPatternParser.extractConversionPattern(conversionPattern);
 		FileInputStream fis = new FileInputStream(new File(fileName));
 		this.lineNo = 1;
 		LineIterator iter = IOUtils.lineIterator(fis, "GBK");
 		try {
-			List<LogEntry> logLines = iterateLogLines(conversionPattern, extractRules, iter, upperLogNum, lowerLogNum, content);
+			List<LogEntry> logLines = iterateLogLines(conversionPattern, extractRules, iter, content, upperLogNum, lowerLogNum);
 			return logLines;
 		} finally {
 			LineIterator.closeQuietly(iter);
 		}
 	}
 
+	/**
+	 * 解析日志文件 
+	 * @param fileName 日志文件路径
+	 * @param conversionPattern Log4j中配置的ConversionPattern
+	 * @return 收集的符合条件的日志行集合
+	 * @throws Exception
+	 */
+	public List<LogEntry> parse(String fileName, String conversionPattern) throws Exception {
+		return this.parse(fileName, conversionPattern, null, null, null);
+	}
+
+	/**
+	 * 遍历日志文件，得到日志行
+	 * @param conversionPattern Log4j中配置的ConversionPattern
+	 * @param extractEls 解析得到的ConversionPattern元素集
+	 * @param iter 文件行枚举器
+	 * @param content 关键字内容
+	 * @param upperLogNum 命中日志行的向上多少行
+	 * @param lowerLogNum 命中日志行的向下多少行
+	 * @return 收集的符合条件的日志行集合
+	 * @throws Exception
+	 */
 	@SuppressWarnings("unchecked")
-	private List<LogEntry> iterateLogLines(String conversionPattern, List<ConversionPatternEl> extractRules, LineIterator iter, Integer upperLogNum, Integer lowerLogNum, String content) throws Exception {
+	private List<LogEntry> iterateLogLines(String conversionPattern, List<ConversionPatternEl> extractEls, LineIterator iter, String content, Integer upperLogNum, Integer lowerLogNum) throws Exception {
 		boolean flag = true;
 		List<LogEntry> result = new ArrayList<LogEntry>();
 		BoundedFifoBuffer upperLogEntries = null;
@@ -79,56 +98,62 @@ public class LogFileParser {
 		if (lowerLogNum != null && lowerLogNum > 0)
 		    lowerLogEntries = new BoundedFifoBuffer(lowerLogNum);
 		LogEntry unfinishedEntry = null;
-		LogEntry currentEntry = fetchARecord(iter, conversionPattern, extractRules, unfinishedEntry);
+		LogEntry currentEntry = fetchARecord(iter, conversionPattern, extractEls, unfinishedEntry);
 		while (currentEntry != null) {
-			String msg = currentEntry.get(FIELD_MESSAGE);
-			boolean isHit = msg.contains(content);
-			if (flag) {
-				if (isHit) {
-					//命中
-					flag = false;
-					if (upperLogEntries != null) {
-						result.addAll(upperLogEntries);
-						upperLogEntries.clear();
-					}
-					currentEntry.put(FIELD_IS_HIT, true);
-					result.add(currentEntry);
-				} else {
-					if (upperLogEntries != null) {
-						if (upperLogEntries.isFull()) {
-							upperLogEntries.remove();
-						}
-						upperLogEntries.add(currentEntry);
-					}
-				}
-				currentEntry = fetchARecord(iter, conversionPattern, extractRules, unfinishedEntry);
-				continue;
+			if (content == null) {
+				currentEntry.put(Constants.FIELD_IS_HIT, true);
+				result.add(currentEntry);
+				currentEntry = fetchARecord(iter, conversionPattern, extractEls, unfinishedEntry);
 			} else {
-				if (!isHit) {
-					if (lowerLogNum != 0) {
-						//未命中
-						if (lowerLogEntries != null) {
-							lowerLogEntries.add(currentEntry);
-							if (lowerLogEntries.isFull()) {
-								//转移Lower中的记录到LogList中
-								flag = true;
-								result.addAll(lowerLogEntries);
-								lowerLogEntries.clear();
+				String msg = currentEntry.getMessage();
+				boolean isHit = msg.contains(content);
+				if (flag) {
+					if (isHit) {
+						//命中
+						flag = false;
+						if (upperLogEntries != null) {
+							result.addAll(upperLogEntries);
+							upperLogEntries.clear();
+						}
+						currentEntry.put(Constants.FIELD_IS_HIT, true);
+						result.add(currentEntry);
+					} else {
+						if (upperLogEntries != null) {
+							if (upperLogEntries.isFull()) {
+								upperLogEntries.remove();
 							}
+							upperLogEntries.add(currentEntry);
+						}
+					}
+					currentEntry = fetchARecord(iter, conversionPattern, extractEls, unfinishedEntry);
+					continue;
+				} else {
+					if (!isHit) {
+						if (lowerLogNum != 0) {
+							//未命中
+							if (lowerLogEntries != null) {
+								lowerLogEntries.add(currentEntry);
+								if (lowerLogEntries.isFull()) {
+									//转移Lower中的记录到LogList中
+									flag = true;
+									result.addAll(lowerLogEntries);
+									lowerLogEntries.clear();
+								}
+							}
+						} else {
+							flag = true;
 						}
 					} else {
-						flag = true;
+						if (lowerLogEntries != null) {
+							result.addAll(lowerLogEntries);
+							lowerLogEntries.clear();
+						}
+						currentEntry.put(Constants.FIELD_IS_HIT, true);
+						result.add(currentEntry);
 					}
-				} else {
-					if (lowerLogEntries != null) {
-						result.addAll(lowerLogEntries);
-						lowerLogEntries.clear();
-					}
-					currentEntry.put(FIELD_IS_HIT, true);
-					result.add(currentEntry);
+					currentEntry = fetchARecord(iter, conversionPattern, extractEls, unfinishedEntry);
+					continue;
 				}
-				currentEntry = fetchARecord(iter, conversionPattern, extractRules, unfinishedEntry);
-				continue;
 			}
 		}
 		return result;
@@ -165,7 +190,7 @@ public class LogFileParser {
 							logger.warn(e);
 						}
 					}
-					currentEntry.put(FIELD_CURRENT_LINE, lineNo++);
+					currentEntry.put(Constants.FIELD_CURRENT_LINE, lineNo++);
 					return currentEntry;
 				} else {
 					unfinishedEntry = new LogEntry();
@@ -180,56 +205,44 @@ public class LogFileParser {
 					}
 				}
 			} else if (unfinishedEntry != null) {
-				String msg = unfinishedEntry.get(FIELD_MESSAGE);
+				String msg = unfinishedEntry.getMessage();
 				msg += '\n' + line;
-				unfinishedEntry.put(FIELD_MESSAGE, msg);
+				unfinishedEntry.setMessage(msg);
 			}
 		}
 		if (unfinishedEntry != null) {
 			currentEntry = unfinishedEntry;
 		}
 		if (currentEntry != null)
-		    currentEntry.put(FIELD_CURRENT_LINE, lineNo++);
+		    currentEntry.put(Constants.FIELD_CURRENT_LINE, lineNo++);
 		return currentEntry;
 	}
 
 	private void extractField(LogEntry entry, ConversionPatternEl rule, String val) throws Exception {
 		if (rule.getPlaceholderName().equals("d")) {
-			DateFormat df = rule.getProperty(ConversionPatternParser.PROP_DATEFORMAT, DateFormat.class);
-			entry.put(FIELD_TIMESTAMP, df.parse(val.trim()));
+			DateFormat df = rule.getProperty(Constants.PROP_DATEFORMAT, DateFormat.class);
+			entry.setTimestamp(df.parse(val.trim()));
 		} else if (rule.getPlaceholderName().equals("p")) {
 			Level lvl = Level.toLevel(val.trim());
-			entry.put(FIELD_LEVEL, lvl);
+			entry.setLevel(lvl);
 		} else if (rule.getPlaceholderName().equals("c")) {
-			entry.put(FIELD_LOGGER, val.trim());
+			entry.setLoggerName(val.trim());
 		} else if (rule.getPlaceholderName().equals("t")) {
-			entry.put(FIELD_THREAD, val.trim());
+			entry.setThread(val.trim());
 		} else if (rule.getPlaceholderName().equals("m")) {
-			entry.put(FIELD_MESSAGE, val.trim());
+			entry.setMessage(val.trim());
 		} else if (rule.getPlaceholderName().equals("F")) {
-			entry.put(FIELD_LOC_FILENAME, val.trim());
+			entry.setLocFileName(val.trim());
 		} else if (rule.getPlaceholderName().equals("C")) {
-			entry.put(FIELD_LOC_CLASS, val.trim());
+			entry.setLocClass(val.trim());
 		} else if (rule.getPlaceholderName().equals("M")) {
-			entry.put(FIELD_LOC_METHOD, val.trim());
+			entry.setLocMethod(val.trim());
 		} else if (rule.getPlaceholderName().equals("L")) {
-			entry.put(FIELD_LOC_LINE, val.trim());
+			entry.setLocLine(Long.parseLong(val.trim()));
 		} else if (rule.getPlaceholderName().equals("x")) {
-			entry.put(FIELD_NDC, val.trim());
+			entry.setNdc(val.trim());
 		} else {
 			throw new Exception("异常消息暂未设置");
 		}
-	}
-
-	public static void main(String[] args) {
-		//		try {
-		//			String conversionPattern = ConversionPatternParser.CONVERSION_JUST_4TEST;
-		//			String fileName = "C:\\mywlb.log";
-		//			LogFileParser parser = new LogFileParser();
-		//			BoundedFifoBuffer logEntries2 = parser.parse(fileName, conversionPattern, "Exception", 5);
-		//			System.out.println(SerializeUtil.serialize(logEntries2));
-		//		} catch (Exception e) {
-		//			e.printStackTrace();
-		//		}
 	}
 }

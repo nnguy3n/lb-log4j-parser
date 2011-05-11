@@ -10,6 +10,7 @@ import org.apache.log4j.Appender;
 import org.apache.log4j.Layout;
 import org.apache.log4j.PatternLayout;
 
+import com.shansun.log4j.constants.Constants;
 import com.shansun.log4j.model.ConversionPatternEl;
 import com.shansun.log4j.utils.RegexUtils;
 
@@ -28,10 +29,6 @@ import com.shansun.log4j.utils.RegexUtils;
  * 2011-4-21      lanbo        1.0        Version  
  */
 public class ConversionPatternParser {
-
-	private static final Pattern EXTRACTION_PATTERN = Pattern.compile("%(-?(\\d+))?(\\.(\\d+))?([a-zA-Z])(\\{([^\\}]+)\\})?");
-	public static final String CONVERSION_JUST_4TEST = "%d [] %-5p %c{2} - %m%n";
-	public static final String PROP_DATEFORMAT = "dateFormat";
 
 	public ConversionPatternParser() {}
 
@@ -103,7 +100,7 @@ public class ConversionPatternParser {
 	 */
 	public List<ConversionPatternEl> extractConversionPattern(String conversionPattern) throws Exception {
 		conversionPattern = prepare(conversionPattern);
-		Matcher m = EXTRACTION_PATTERN.matcher(conversionPattern);
+		Matcher m = Constants.EXTRACTION_PATTERN.matcher(conversionPattern);
 		List<ConversionPatternEl> ret = new ArrayList<ConversionPatternEl>();
 		while (m.find()) {
 			String minWidthModifier = m.group(2);
@@ -200,7 +197,7 @@ public class ConversionPatternParser {
 			}
 			try {
 				// 放置日期格式到ConversionPattern元素中
-				el.putProperty(PROP_DATEFORMAT, new SimpleDateFormat(el.getModifier()));
+				el.putProperty(Constants.PROP_DATEFORMAT, new SimpleDateFormat(el.getModifier()));
 			} catch (IllegalArgumentException e) {
 				throw new Exception(e);
 			}
